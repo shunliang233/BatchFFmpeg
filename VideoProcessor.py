@@ -68,9 +68,7 @@ class VideoProcessor:
         
         # 检测 processor 的处理内容
         self._video_merge: bool = self._detect_video_merge()
-        self._exist_ts: bool = self._detect_ts()
         print(f"检测到需要合并视频: {self._video_merge}")
-        print(f"检测到 TS 文件: {self._exist_ts}")
     
     def _merge(self) -> None:
         """合并视频文件"""
@@ -81,11 +79,11 @@ class VideoProcessor:
                 self._file_map[out_file] = []
             self._file_map[out_file].append(in_file)
     
-    def _rename(self, pattern: str = r"(\d+)") -> None:
+    def _rename(self, pattern: str) -> None:
         """根据给定的模式重命名文件
         
         Args:
-            pattern: 正则表达式，用于捕获文件名中的数字部分，默认捕获第一个数字
+            pattern: 正则表达式，用于捕获文件名中的数字部分
         """
         # 提取文件中对应的数字进行排序
         file_number_pairs = []
@@ -128,13 +126,6 @@ class VideoProcessor:
                         f"期望: {expected}, 实际: {numbers}"
                     )
         return has_merge
-    
-    def _detect_ts(self) -> bool:
-        """检测是否有 TS 文件需要转换"""
-        for in_file in self._file_list:
-            if in_file.suffix.lower() == ".ts":
-                return True
-        return False
     
     def processor(self) -> None:
         """处理视频文件，合并或转换后存储到输出目录"""
