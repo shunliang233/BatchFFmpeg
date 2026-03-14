@@ -7,14 +7,14 @@ VideoProcessor - 视频批处理工具
 - 合并序列号连续的视频文件
 - 自动检测并验证文件序列号
 
-Last Modified: 2026-01-25
+Last Modified: 2026-03-14
 """
 
-import re                           # 正则表达式
-from pathlib import Path            # 路径处理
-from typing import List, Dict, Iterator   # 类型提示
-from enum import Enum               # 枚举类型
-import argparse             # 脚本参数解析
+import re                     # 正则表达式
+from pathlib import Path      # 路径处理
+from typing import List, Dict # 类型提示
+from enum import Enum         # 枚举类型
+import argparse               # 脚本参数解析
 
 class Mode(Enum):
     MERGE = "merge"      # 合并模式
@@ -68,7 +68,7 @@ class VideoProcessor:
         
         # 检测 processor 的处理内容
         self._video_merge: bool = self._detect_video_merge()
-        print(f"检测到需要合并视频: {self._video_merge}")
+        print(f"检测到需要合并视频: {self._video_merge}\n")
     
     def _merge(self) -> None:
         """合并视频文件"""
@@ -86,19 +86,19 @@ class VideoProcessor:
             pattern: 正则表达式，用于捕获文件名中的数字部分
         """
         # 提取文件中对应的数字进行排序
-        file_number_pairs = []
+        file_number_pairs: List[tuple[Path, int]] = []
         for in_file in self._file_list:
             matches = re.search(pattern, in_file.stem)
             if not matches:
                 raise ValueError(f"文件名不匹配模式 {pattern}: {in_file.name}")
-            number = int(matches.group(1))
-            file_number_pairs.append((in_file, number))
+            sequence = int(matches.group(1))
+            file_number_pairs.append((in_file, sequence))
         file_number_pairs.sort(key=lambda x: x[1])
         # 计算需要补零的位数
         total = len(file_number_pairs)
         width = len(str(total))
         # 生成新文件名映射
-        for idx, (in_file, old_number) in enumerate(file_number_pairs, start=1):
+        for idx, (in_file, seq_num) in enumerate(file_number_pairs, start=1):
             new_number = str(idx).zfill(width)
             new_stem = re.sub(pattern, new_number, in_file.stem, count=1)
             out_file = self.out_folder / (new_stem + ".mp4")
@@ -168,46 +168,35 @@ class VideoProcessor:
                     print(f"合并失败: {[f.name for f in in_files]}, 错误信息: {e}")
                 finally:
                     concat_file.unlink(missing_ok=True)
-    
 
-    # # 按不同方式排序的方法
-    # def sort_by_duplicate(self) -> None:
-    #     """按文件名最后的括号内数字排序"""
-    #     def get_number(file_path: Path) -> int:
-    #         """提取文件名最后的括号内数字"""
-    #         matches = re.search(r"\((\d+)\)$", file_path.stem)
-    #         if not matches:
-    #             return 0
-    #         return int(matches.group(1))
-    #     self._file_list.sort(key=get_number)
-    # def sort_by_name(self) -> None:
-    #     """按文件名排序"""
-    #     self._file_list.sort()
-    # def sort_by_size(self) -> None:
-    #     """按文件大小排序"""
-    #     self._file_list.sort(key=lambda f: f.stat().st_size)
-    # def sort_by_date(self) -> None:
-    #     """按修改日期排序"""
-    #     self._file_list.sort(key=lambda f: f.stat().st_mtime)
-
-    # 格式化输出文件列表
-    def print(self, n: int = 5) -> None:
+    def print(self) -> None:
         """展示将要进行的文件转换操作"""
         if not self._file_map:
             print("[没有文件需要处理]")
             return
         
+        # 计算最长输入文件名宽度，用于对齐 -->
+        max_width = max(
+            max(len(f.name) for f in in_files)
+            for in_files in self._file_map.values()
+        )
+        
         for out_file, in_files in self._file_map.items():
-            in_names = ", ".join(f.name for f in in_files)
-            print(f"{in_names} --> {out_file.name}")
-        # """格式化输出文件列表，每行 n 个，纵向对齐"""
-        # if not self._file_list:
-        #     print("[空列表]")
-        #     return
-        # maxlen = max(len(f.name) for f in self._file_list)
-        # for i in range(0, len(self._file_list), n):
-        #     row = self._file_list[i:i+n]
-        #     print('  '.join(f.name.ljust(maxlen) for f in row))
+            if len(in_files) == 1:
+                print(f"{in_files[0].name:<{max_width}}  -->  {out_file.name}")
+            else:
+                mid = len(in_files) // 2
+                for i, in_file in enumerate(in_files):
+                    if i == mid:
+                        arrow = f"  -->  {out_file.name}"
+                    elif i == 0:
+                        arrow = "  \\"
+                    elif i == len(in_files) - 1:
+                        arrow = "  /"
+                    else:
+                        arrow = "  |"
+                    print(f"{in_file.name:<{max_width}}{arrow}")
+            print()
 
 
 if __name__ == "__main__":
@@ -220,11 +209,6 @@ if __name__ == "__main__":
                         help="处理模式")
     parser.add_argument("--pattern", default=r"(\d+)",
                         help="重命名模式的正则表达式（仅在 rename 模式下使用）")
-    # parser.add_argument("--prefix", default="", help="输出文件名的前缀")
-    # parser.add_argument("--suffix", default="", help="输出文件名的后缀")
-    # parser.add_argument("-s", "--sort", default="name",
-    #                     choices=["name", "size", "date", "number"],
-    #                     help="排序方法 (name, size, date, number)")
     parser.add_argument("-t", "--test", action="store_true",
                         help="测试模式：仅打印排序后的文件列表")
     args = parser.parse_args()
