@@ -127,6 +127,100 @@ class VideoProcessor:
                     )
         return has_merge
     
+    def _validate_inputs(self, in_files: List[Path]) -> None:
+        """拼接前验证每个文件的有效性及流参数一致性
+
+        Args:
+            in_files: 待拼接文件列表
+        Raises:
+            ValueError: 文件损坏、缺少视频流或参数不一致时抛出
+        """
+        import subprocess
+        import json
+
+        streams_list: List[tuple[Path, list[dict]]] = []
+        for in_file in in_files:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error",
+                 "-show_streams", "-print_format", "json",
+                 str(in_file)],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise ValueError(
+                    f"文件无效或损坏: {in_file.name}\n{result.stderr.strip()}"
+                )
+            info = json.loads(result.stdout)
+            streams: list[dict] = info.get("streams", [])
+            if not streams:
+                raise ValueError(f"文件没有有效的流: {in_file.name}")
+            streams_list.append((in_file, streams))
+
+        def get_stream(streams: list[dict], codec_type: str) -> dict | None:
+            """从流列表中找出指定类型（视频或音频）的第一条流，找不到就返回 None。"""
+            return next(
+                (s for s in streams if s.get("codec_type") == codec_type),
+                None)
+
+        ref_file, ref_streams = streams_list[0]
+        ref_video = get_stream(ref_streams, "video")
+        ref_audio = get_stream(ref_streams, "audio")
+        if ref_video is None:
+            raise ValueError(f"文件缺少视频流: {ref_file.name}")
+        if ref_audio is None:
+            raise ValueError(f"文件缺少音频流: {ref_file.name}")
+
+        for in_file, streams in streams_list[1:]:
+            video = get_stream(streams, "video")
+            audio = get_stream(streams, "audio")
+
+            # 检查视频流
+            if video is None:
+                raise ValueError(f"文件缺少视频流: {in_file.name}")
+            if video.get("codec_name") != ref_video.get("codec_name"):
+                raise ValueError(
+                    f"视频编解码器不匹配:\n"
+                    f"  {ref_file.name}: {ref_video.get('codec_name')}\n"
+                    f"  {in_file.name}: {video.get('codec_name')}"
+                )
+            if (video.get("width") != ref_video.get("width") or
+                    video.get("height") != ref_video.get("height")):
+                raise ValueError(
+                    f"视频分辨率不匹配:\n"
+                    f"  {ref_file.name}: "
+                    f"{ref_video.get('width')}x{ref_video.get('height')}\n"
+                    f"  {in_file.name}: "
+                    f"{video.get('width')}x{video.get('height')}"
+                )
+
+            # 检查音频流
+            if audio is None:
+                raise ValueError(f"文件缺少音频流: {in_file.name}")
+            if audio.get("codec_name") != ref_audio.get("codec_name"):
+                raise ValueError(
+                    f"音频编解码器不匹配:\n"
+                    f"  {ref_file.name}: {ref_audio.get('codec_name')}\n"
+                    f"  {in_file.name}: {audio.get('codec_name')}"
+                )
+            if audio.get("sample_rate") != ref_audio.get("sample_rate"):
+                raise ValueError(
+                    f"音频采样率不匹配:\n"
+                    f"  {ref_file.name}: {ref_audio.get('sample_rate')} Hz\n"
+                    f"  {in_file.name}: {audio.get('sample_rate')} Hz"
+                )
+            if audio.get("channels") != ref_audio.get("channels"):
+                raise ValueError(
+                    f"音频声道数不匹配:\n"
+                    f"  {ref_file.name}: {ref_audio.get('channels')} 声道\n"
+                    f"  {in_file.name}: {audio.get('channels')} 声道"
+                )
+            if audio.get("profile") != ref_audio.get("profile"):
+                raise ValueError(
+                    f"音频编解码器 Profile 不匹配:\n"
+                    f"  {ref_file.name}: {ref_audio.get('profile')}\n"
+                    f"  {in_file.name}: {audio.get('profile')}"
+                )
+
     def processor(self) -> None:
         """处理视频文件，合并或转换后存储到输出目录"""
         import subprocess
@@ -150,7 +244,7 @@ class VideoProcessor:
                         print(f"转换失败: {in_file.name}, 错误信息: {e}")
                 else:
                     shutil.copy2(in_file, out_file)
-                    print(f"已复制: {in_file.name} -> {out_file.name}")
+                    print(f"已复制: -> {out_file.name}")
             else:
                 # 多个输入文件，合并为一个输出文件
                 concat_file = self.tmp_folder / (out_file.stem + "_concat.txt")
@@ -158,16 +252,25 @@ class VideoProcessor:
                     for in_file in in_files:
                         f.write(f"file '{in_file.as_posix()}'\n")
                 try:
+                    self._validate_inputs(in_files)
+                except ValueError as e:
+                    print(f"验证失败，跳过合并 {out_file.name}: {e}")
+                    dest = self.out_folder / concat_file.name
+                    shutil.copy2(concat_file, dest)
+                    concat_file.unlink(missing_ok=True)
+                    continue
+                try:
                     subprocess.run(
                         ["ffmpeg", "-f", "concat", "-safe", "0", "-i", str(concat_file),
                          "-c", "copy", str(out_file)],
                         check=True, capture_output=True
                     )
-                    print(f"已合并: {[f.name for f in in_files]} -> {out_file.name}")
+                    print(f"已合并: -> {out_file.name}")
                 except subprocess.CalledProcessError as e:
                     print(f"合并失败: {[f.name for f in in_files]}, 错误信息: {e}")
                 finally:
                     concat_file.unlink(missing_ok=True)
+        self.tmp_folder.rmdir()
 
     def print(self) -> None:
         """展示将要进行的文件转换操作"""
@@ -199,6 +302,7 @@ class VideoProcessor:
             print()
 
 
+# TODO: Check video audio alignment of output file.
 if __name__ == "__main__":
     # 创建命令行参数解析器，添加输入输出目录参数
     parser = argparse.ArgumentParser(description="批量处理视频文件")
